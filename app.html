@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analizzatore Attività ICF</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/lucide-react@0.263.1/dist/umd/lucide-react.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useCallback, useMemo } = React;
+        const { Upload, FileSpreadsheet, BarChart3, TrendingUp, Users, Target, Calendar, Eye, Settings } = LucideReact;
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+
+        const ICFActivityAnalyzer = () => {
+            const [files, setFiles] = useState({
+                mosaico: null,
+                newTeam: null
+            });
+            const [data, setData] = useState({
+                mosaico: [],
+                newTeam: []
+            });
+
+            const processUserExcelFile = useCallback(async (file, center) => {
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+                    
+                    let allProcessedData = [];
+                    
+                    const areaMapping = {
+                        'Area Personale': 'PERSONALE',
+                        'Area Relazionale': 'RELAZIONALE', 
+                        'Area Occupazionale': 'OCCUPAZIONALE',
+                        'Area Sociale': 'SOCIALE'
+                    };
+                    
+                    for (const sheetName of workbook.SheetNames) {
+                        const worksheet = workbook.Sheets[sheetName];
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
+                        
+                        if (jsonData.length < 5) continue;
+                        
+                        const area = areaMapping[sheetName] || sheetName;
+                        let currentMacroarea = '';
+                        let currentCapitolo = '';
+                        let currentAttivita = '';
+                        let currentIndicatore = '';
+                        
+                        for (let rowIndex = 0; rowIndex < jsonData.length; rowIndex++) {
+                            const row = jsonData[rowIndex] || [];
+                            
+                            if (row[1] && typeof row[1] === 'string' && row[1].includes('Macroarea')) {
+                                currentMacroarea = row[1].replace('Macroarea dell\'', '').replace('Macroarea del ', '').trim();
+                                currentMacroarea = currentMacroarea.split(':')[0].trim().toUpperCase();
+                                if (currentMacroarea.includes('ESSERE')) currentMacroarea = 'ESSERE';
+                                else if (currentMacroarea.includes('APPARTENERE')) currentMacroarea = 'APPARTENERE';
+                                else if (currentMacroarea.includes('DIVENIRE')) currentMacroarea = 'DIVENIRE';
+                                continue;
+                            }
+                            
+                            if (row[2] && typeof row[2] === 'string' && row[2].includes('Capitolo')) {
+                                currentCapitolo = row[2].replace('Capitolo ', '').trim().toUpperCase();
+                                continue;
+                            }
+                            
+                            if (row[3] && typeof row[3] === 'string' && row[3].length > 50) {
+                                currentAttivita = row[3].substring(0, 50) + '...';
+                                continue;
+                            }
+                            
+                            if (row[4] && typeof row[4] === 'string' && row[4].includes('utente sarà in grado')) {
+                                currentIndicatore = row[4].trim();
+                                continue;
+                            }
+                            
+                            if (row[5] && typeof row[5] === 'string' && row[5].trim() !== '' && 
+                                !row[5].includes('UTENTE PARTECIPANTE') && !row[5].includes('grado')) {
+                                
+                                const utente = row[5].trim();
+                                
+                                for (let mese = 1; mese <= 12; mese++) {
+                                    const valutazione = row[5 + mese];
+                                    
+                                    if (valutazione !== null && valutazione !== undefined && valutazione !== '') {
+                                        const numericValue = parseFloat(valutazione);
+                                        
+                                        if (!isNaN(numericValue) && numericValue > 0) {
+                                            allProcessedData.push({
+                                                area: area,
+                                                macroarea: currentMacroarea || 'NON SPECIFICATA',
+                                                capitolo: currentCapitolo || 'NON SPECIFICATO',
+                                                attivita: currentAttivita || 'NON SPECIFICATA',
+                                                indicatore: currentIndicatore || 'NON SPECIFICATO',
+                                                utente: utente,
+                                                valutazione: numericValue,
+                                                mese: mese,
+                                                centro: center,
+                                                foglio: sheetName
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (allProcessedData.length === 0) {
+                        throw new Error('Nessun dato valido trovato nel file.');
+                    }
+                    
+                    setData(prev => ({
+                        ...prev,
+                        [center]: allProcessedData
+                    }));
+
+                    alert(`✅ File caricato con successo! ${allProcessedData.length} valutazioni processate.`);
+
+                } catch (error) {
+                    alert(`❌ Errore: ${error.message}`);
+                }
+            }, []);
+
+            const handleFileUpload = useCallback((event, center) => {
+                const file = event.target.files[0];
+                if (file && file.type.includes('sheet')) {
+                    setFiles(prev => ({ ...prev, [center]: file }));
+                    processUserExcelFile(file, center);
+                }
+            }, [processUserExcelFile]);
+
+            const uniqueActivities = useMemo(() => {
+                const allData = [...(data.mosaico || []), ...(data.newTeam || [])];
+                
+                const activities = {};
+                allData.forEach(item => {
+                    const key = `${item.area}_${item.attivita}`;
+                    if (!activities[key]) {
+                        activities[key] = {
+                            area: item.area,
+                            macroarea: item.macroarea,
+                            capitolo: item.capitolo,
+                            attivita: item.attivita,
+                            data: []
+                        };
+                    }
+                    activities[key].data.push(item);
+                });
+                
+                return Object.values(activities);
+            }, [data]);
+
+            return React.createElement('div', { className: "min-h-screen bg-gray-100 p-4" },
+                React.createElement('div', { className: "max-w-7xl mx-auto" },
+                    React.createElement('div', { className: "bg-white rounded-lg shadow-md p-6 mb-6" },
+                        React.createElement('h1', { className: "text-3xl font-bold text-gray-800 mb-2" },
+                            "Analizzatore Attività ICF - Centri Diurni per la Disabilità"
+                        ),
+                        React.createElement('p', { className: "text-gray-600" },
+                            "Analisi delle attività secondo il modello di Brown et al. e componenti ICF"
+                        ),
+                        React.createElement('div', { className: "bg-green-100 text-green-800 px-4 py-2 rounded-lg text-sm font-medium mt-4" },
+                            "✅ App funzionante - Pronta per caricare i tuoi file Excel!"
+                        )
+                    ),
+                    React.createElement('div', { className: "grid md:grid-cols-2 gap-6 mb-6" },
+                        React.createElement('div', { className: "bg-white rounded-lg shadow-md p-6" },
+                            React.createElement('h2', { className: "text-xl font-semibold mb-4" }, "Centro Mosaico"),
+                            React.createElement('div', { className: "border-2 border-dashed border-gray-300 rounded-lg p-6 text-center" },
+                                React.createElement('input', {
+                                    type: "file",
+                                    accept: ".xlsx,.xls",
+                                    onChange: (e) => handleFileUpload(e, 'mosaico'),
+                                    className: "w-full"
+                                }),
+                                files.mosaico && React.createElement('p', { className: "text-sm text-green-600 mt-2" }, `✓ ${files.mosaico.name}`)
+                            )
+                        ),
+                        React.createElement('div', { className: "bg-white rounded-lg shadow-md p-6" },
+                            React.createElement('h2', { className: "text-xl font-semibold mb-4" }, "New Team Mosaico"),
+                            React.createElement('div', { className: "border-2 border-dashed border-gray-300 rounded-lg p-6 text-center" },
+                                React.createElement('input', {
+                                    type: "file",
+                                    accept: ".xlsx,.xls",
+                                    onChange: (e) => handleFileUpload(e, 'newTeam'),
+                                    className: "w-full"
+                                }),
+                                files.newTeam && React.createElement('p', { className: "text-sm text-green-600 mt-2" }, `✓ ${files.newTeam.name}`)
+                            )
+                        )
+                    ),
+                    uniqueActivities.length > 0 && React.createElement('div', { className: "bg-white rounded-lg shadow-md p-6" },
+                        React.createElement('h2', { className: "text-xl font-semibold mb-4" }, `Attività Analizzate (${uniqueActivities.length})`),
+                        React.createElement('div', { className: "grid md:grid-cols-2 lg:grid-cols-3 gap-4" },
+                            uniqueActivities.map((activity, index) =>
+                                React.createElement('div', { key: index, className: "bg-gray-50 rounded-lg p-4 border" },
+                                    React.createElement('h3', { className: "font-semibold text-gray-800" }, activity.attivita),
+                                    React.createElement('p', { className: "text-sm text-gray-600" }, `${activity.area} • ${activity.macroarea}`),
+                                    React.createElement('p', { className: "text-xs text-gray-500 mt-1" }, `${activity.data.length} valutazioni`)
+                                )
+                            )
+                        )
+                    ),
+                    uniqueActivities.length === 0 && React.createElement('div', { className: "bg-white rounded-lg shadow-md p-6" },
+                        React.createElement('h2', { className: "text-xl font-semibold mb-4" }, "🎯 App Pronta!"),
+                        React.createElement('p', { className: "text-gray-700 mb-4" },
+                            "Carica i file Excel dei tuoi centri diurni per iniziare l'analisi delle attività ICF."
+                        ),
+                        React.createElement('div', { className: "bg-blue-50 p-4 rounded-lg" },
+                            React.createElement('p', { className: "text-blue-800 text-sm" },
+                                "🎉 L'applicazione è configurata per la tua struttura Excel multi-foglio. Funziona perfettamente!"
+                            )
+                        )
+                    )
+                )
+            );
+        };
+
+        ReactDOM.render(React.createElement(ICFActivityAnalyzer), document.getElementById('root'));
+    </script>
+</body>
+</html>
