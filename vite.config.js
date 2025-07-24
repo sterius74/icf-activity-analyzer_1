@@ -3,9 +3,5 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/icf-activity-analyzer_1/',
-  build: {
-    outDir: 'dist',
-    sourcemap: true
-  }
+  base: '/icf-activity-analyzer_1/'
 })
